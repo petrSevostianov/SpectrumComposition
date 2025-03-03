@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectrum Fitting with LEDs</title>
+    <script src="https://www.lactame.com/lib/ml/6.0.0/ml.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="settings">
+    <h2>Target Spectrum</h2>
+    <label>Black Body Temperature (K): 
+        <input type="number" id="blackBodyTemp" value="6500" min="1000" max="20000">
+        <button onclick="generateBlackBody()">Generate Black Body Spectrum</button>
+    </label>
+    <textarea id="targetSpectrum" placeholder="Enter 401 space-separated values"></textarea>
+
+    <h2>LED Spectrums</h2>
+    <div id="ledContainer"></div>
+    <button onclick="addLED()">Add LED</button>
+
+    
+    </div>
+
+
+    <div class="graph">
+        <h2>Multipliers</h2>    
+            <pre id="multipliers"></pre>
+        <h2>Spectrum Graph</h2>
+            <canvas id="spectrumChart"></canvas>
+    </div>
+
+    <script>
+
+        function setMultipliers(data, multipliers) {
+            //format ledName: multiplier
+            document.getElementById("multipliers").textContent = data.leds.map((led, i) => `${led.name}: ${multipliers[i].toFixed(2)}`).join("\n");
+        }
+
+        const wavelengthData = Array.from({length: 401}, (_, i) => 380 + i);
+
+        function spectrumToText(spectrum) {
+            return spectrum.map(v => v.toFixed(4)).join(" ");
+        }
+        function textToSpectrum(text) {   
+            var textFragments = text.trim().split(/\s+/);
+
+            let spectrum = textFragments.map(parseFloat).filter(v => !isNaN(v));
+
+            if (spectrum.length < 401) {
+                spectrum = spectrum.concat(new Array(401 - spectrum.length).fill(0));
+            } else if (spectrum.length > 401) {
+                spectrum = spectrum.slice(0, 401);
+            }
+            return spectrum;
+        }
+        
+
+        function addLED(name = "", spectrum, color = "#ff0000", enabled = true) {
+            const div = document.createElement("div");
+            div.classList.add("led-input");
+
+            if (!spectrum) {
+                spectrum = new Array(401).fill(1);
+            }
+
+            div.innerHTML = `
+                <div class="led-parameters">
+                    <input type="text" placeholder="LED Name" value="${name}" class="led-name">
+                    <input type="color" value="${color}" class="led-color">
+                    <label><input type="checkbox" ${enabled ? "checked" : ""} class="led-enable"> Enable</label>
+                    <button onclick="this.parentElement.parentElement.remove()" class="led-remove">Remove</button>
+                </div>
+                <textarea placeholder="Enter 401 space-separated values" class="led-spectrum">${spectrumToText(spectrum)}</textarea>
+            `;
+
+            document.getElementById("ledContainer").appendChild(div);
+
+        }
+
+
+        function generateBlackBody() {
+            const h = 6.626e-34, c = 3e8, k = 1.381e-23;  // Planck constants
+            let T = parseFloat(document.getElementById("blackBodyTemp").value);
+
+            let spectrum = wavelengthData.map(lambda => {
+                let l = lambda * 1e-9;  // Convert nm to meters
+                return (2 * h * c ** 2) / (l ** 5 * (Math.exp(h * c / (l * k * T)) - 1));
+            });
+
+            let maxVal = Math.max(...spectrum);
+            spectrum = spectrum.map(v => v / maxVal);  // Normalize
+
+            document.getElementById("targetSpectrum").value = spectrumToText(spectrum);
+
+        }
+
+
+
+        function getDataFromUI() {
+            const targetSpectrum = textToSpectrum(document.getElementById("targetSpectrum").value);
+
+            const leds = Array.from(document.querySelectorAll(".led-input")).map(div => ({
+                name: div.querySelector(".led-name").value.trim(),
+                spectrumValues: textToSpectrum(div.querySelector(".led-spectrum").value),
+                color: div.querySelector(".led-color").value,
+                enabled: div.querySelector(".led-enable").checked
+            }));
+
+            return { targetSpectrum, leds };
+        }
+
+        //result: SpectrumCompositionData
+        function getDataFromLocalStorage() {
+            const data = JSON.parse(localStorage.getItem("spectrumCompositionData"));
+            if (!data) {
+                data = {};
+            }
+            if (!data.targetSpectrum || data.targetSpectrum.length !== 401){
+                data.targetSpectrum = new Array(401).fill(1);
+            }
+            return data;
+        }
+
+        function setDataToLocalStorage(data) {
+            localStorage.setItem("spectrumCompositionData", JSON.stringify(data));
+        }
+
+
+        function getBlackBodySpectrumGeneratorDataFromUI(){
+            return {
+                blackBodyTemp: parseFloat(document.getElementById("blackBodyTemp").value)
+            };
+        }
+
+        function getBlackBodySpectrumGeneratorDataFromLocalStorage() {
+            const blackBodyData = JSON.parse(localStorage.getItem("blackBodySpectrumGeneratorData"));
+            if (blackBodyData) {
+                document.getElementById("blackBodyTemp").value = blackBodyData.blackBodyTemp;
+            }
+        }
+
+
+
+        function setDataToUI(data) {
+            document.getElementById("targetSpectrum").value = spectrumToText(data.targetSpectrum);
+            document.getElementById("ledContainer").innerHTML = "";
+            data.leds.forEach(led => {
+                addLED(led.name, led.spectrumValues, led.color, led.enabled);
+            });
+        }
+
+
+        function setBlackBodySpectrumGeneratorDataToUI(data) {
+            document.getElementById("blackBodyTemp").value = data.blackBodyTemp;
+        }
+
+        function onDataChanged() {
+            var data = getDataFromUI();
+            solveSystem(data);
+            setDataToLocalStorage(data);
+            updateChart();
+        }
+
+
+        function loadFromLocalStorage() {
+            var data = getDataFromLocalStorage();
+            var blackBodySpectrumGeneratorData = getBlackBodySpectrumGeneratorDataFromLocalStorage();
+            setDataToUI(data);
+            setBlackBodySpectrumGeneratorDataToUI(blackBodySpectrumGeneratorData);
+        }
+
+
+        
+
+        //data: SpectrumCompositionData
+        function solveSystem(data) {
+            
+            const numSamples = 401;
+            
+            let target = data.targetSpectrum;
+            console.log(target.length);
+            
+
+            let activeLeds = data.leds.filter(led => led.enabled);
+            let numParameters = activeLeds.length;
+            if (numParameters === 0) return;
+
+            let colors = [];
+            //gradient - array size numParameters
+            let gradient = new Array(numParameters).fill(0);
+            let hessian = new Array(numParameters).fill(0).map(() => new Array(numParameters).fill(0));
+
+            for (let i = 0; i < numParameters; i++) {
+                let led = activeLeds[i];
+                let spectrumI = led.spectrumValues;
+
+                colors.push(led.color);
+
+                gradient[i] = spectrumI.reduce((acc, val, j) => acc + val * target[j], 0);
+                for (let j = 0; j < numParameters; j++) {
+                    let spectrumJ = activeLeds[j].spectrumValues;
+                    hessian[i][j] = spectrumI.reduce((acc, val, k) => acc + val * spectrumJ[k], 0);
+                }
+            }
+            console.log(hessian);
+            console.log(gradient);
+            
+            let cholesky = new ML.CholeskyDecomposition(hessian);
+            let x = cholesky.solve(new ML.Matrix([gradient]).transpose()).to1DArray();
+            let index = 0;
+            let result = new Array(numParameters);
+            for (let i = 0; i < data.leds.length; i++) {
+                if (data.leds[i].enabled) {
+                    result[i] = x[index];
+                    index++;
+                } else{
+                    result[i] = 0;
+                }
+            }
+            return result;
+        }
+
+        function updateChart(data, multipliers) {
+
+            var datasetElementPrototype = {
+                borderColor: "black",
+                borderWidth: 2,
+                fill: false,
+                pointRadius: 0,
+                pointHoverRadius: 0
+            }
+
+            let datasets = [
+                Object.assign({}, datasetElementPrototype, { label: "Target", data: data.targetSpectrum })
+            ];
+
+            data.leds.forEach((led, i) => {
+                datasets.push(Object.assign({}, datasetElementPrototype, {
+                    label: `${led.name}`,
+                    data: led.spectrumValues.map(v => v * multipliers[i]),
+                    borderColor: led.color,
+                    borderWidth: 1
+                }));
+            });
+
+            let sum = new Array(401).fill(0);
+            data.leds.forEach((led, i) => {
+                if (led.enabled) {
+                    sum = sum.map((v, j) => v + led.spectrumValues[j] * multipliers[i]);
+                }
+            });
+            datasets.push(Object.assign({}, datasetElementPrototype, {
+                label: `Sum`,
+                data: sum,
+                borderColor: "black",
+                borderWidth: 1
+            }));
+
+
+            if (!window.chart) {
+                window.chart = new Chart(document.getElementById("spectrumChart"), {
+
+                    type: "line",
+                    data: { labels: wavelengthData, datasets },
+                    options: { responsive: true, scales: { x: { title: { display: true, text: "Wavelength (nm)" } } } }
+                });
+            }
+            window.chart.data.datasets = datasets;
+            window.chart.update();
+            //remove animation
+            window.chart.options.animation = false;
+
+        }
+   
+
+        document.addEventListener("DOMContentLoaded", ()=>{
+            var data = getDataFromLocalStorage();
+            console.log(data);
+            setDataToUI(data);
+            //solveSystem(data);
+            //updateChart(data);
+        });
+
+        //update timer
+        setInterval(() => {
+            let data = getDataFromUI();
+            var multipliers = solveSystem(data);
+            setMultipliers(data, multipliers);
+            setDataToLocalStorage(data);
+            updateChart(data,multipliers);
+        }, 250);
+        
+    
+    
+    
+    </script>
+
+</body>
+</html>

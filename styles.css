@@ -1,0 +1,54 @@
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+    margin: 0;
+}
+
+.settings {
+    width: 40%;
+    padding: 20px;
+    box-sizing: border-box;
+    overflow-y: auto;
+}
+
+.graph {
+    width: 60%;
+    padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.led-input {
+    margin-bottom: 10px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.led-parameters {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.led-name, .led-color, .led-enable, .led-remove {
+    margin-bottom: 5px;
+}
+
+.led-spectrum {
+    width: 100%;
+    height: 80px;
+}
+
+textarea {
+    width: 100%;
+    height: 80px;
+}
+
+canvas {
+    max-width: 100%;
+}
