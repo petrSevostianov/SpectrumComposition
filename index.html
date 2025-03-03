@@ -10,30 +10,39 @@
 </head>
 <body>
     <div class="settings">
-    <h2>Target Spectrum</h2>
-    <label>Black Body Temperature (K): 
-        <input type="number" id="blackBodyTemp" value="6500" min="1000" max="20000">
-        <button onclick="generateBlackBody()">Generate Black Body Spectrum</button>
-    </label>
-    <textarea id="targetSpectrum" placeholder="Enter 401 space-separated values"></textarea>
+        <h2>Target Spectrum</h2>
+        <label>Black Body Temperature (K): 
+            <input type="number" id="blackBodyTemp" value="6500" min="1000" max="20000">
+            <button onclick="generateBlackBody()">Generate Black Body Spectrum</button>
+        </label>
+        <textarea id="targetSpectrum" placeholder="Enter 401 space-separated values"></textarea>
 
-    <h2>LED Spectrums</h2>
-    <div id="ledContainer"></div>
-    <button onclick="addLED()">Add LED</button>
+        <h2>Weights</h2>
+        <textarea id="weights" placeholder="Enter 401 space-separated values"></textarea>
+        <button onclick="fillWeightsWith(photopicEfficiency)">
+            Fill with Photopic Efficiency
+        </button>
+        <button onclick="fillWeightsWith(cameraEfficiency)">
+            Fill with Camera Efficiency
+        </button>
+        
+        <button onclick="fillWeightsWith(() => 1)">
+            Fill with Ones
+        </button>
 
-    
+        <h2>LED Spectrums</h2>
+        <div id="ledContainer"></div>
+        <button onclick="addLED()">Add LED</button>
     </div>
-
 
     <div class="graph">
         <h2>Multipliers</h2>    
-            <pre id="multipliers"></pre>
+        <pre id="multipliers"></pre>
         <h2>Spectrum Graph</h2>
-            <canvas id="spectrumChart"></canvas>
+        <canvas id="spectrumChart"></canvas>
     </div>
 
     <script>
-
         function setMultipliers(data, multipliers) {
             //format ledName: multiplier
             document.getElementById("multipliers").textContent = data.leds.map((led, i) => `${led.name}: ${multipliers[i].toFixed(2)}`).join("\n");
@@ -44,11 +53,10 @@
         function spectrumToText(spectrum) {
             return spectrum.map(v => v.toFixed(4)).join(" ");
         }
+
         function textToSpectrum(text) {   
             var textFragments = text.trim().split(/\s+/);
-
             let spectrum = textFragments.map(parseFloat).filter(v => !isNaN(v));
-
             if (spectrum.length < 401) {
                 spectrum = spectrum.concat(new Array(401 - spectrum.length).fill(0));
             } else if (spectrum.length > 401) {
@@ -56,7 +64,6 @@
             }
             return spectrum;
         }
-        
 
         function addLED(name = "", spectrum, color = "#ff0000", enabled = true) {
             const div = document.createElement("div");
@@ -77,9 +84,7 @@
             `;
 
             document.getElementById("ledContainer").appendChild(div);
-
         }
-
 
         function generateBlackBody() {
             const h = 6.626e-34, c = 3e8, k = 1.381e-23;  // Planck constants
@@ -94,13 +99,11 @@
             spectrum = spectrum.map(v => v / maxVal);  // Normalize
 
             document.getElementById("targetSpectrum").value = spectrumToText(spectrum);
-
         }
-
-
 
         function getDataFromUI() {
             const targetSpectrum = textToSpectrum(document.getElementById("targetSpectrum").value);
+            const weights = textToSpectrum(document.getElementById("weights").value);
 
             const leds = Array.from(document.querySelectorAll(".led-input")).map(div => ({
                 name: div.querySelector(".led-name").value.trim(),
@@ -109,7 +112,7 @@
                 enabled: div.querySelector(".led-enable").checked
             }));
 
-            return { targetSpectrum, leds };
+            return { targetSpectrum, leds, weights };
         }
 
         //result: SpectrumCompositionData
@@ -121,13 +124,15 @@
             if (!data.targetSpectrum || data.targetSpectrum.length !== 401){
                 data.targetSpectrum = new Array(401).fill(1);
             }
+            if (!data.weights || data.weights.length !== 401) {
+                data.weights = new Array(401).fill(1); // Initialize weights array if not present
+            }
             return data;
         }
 
         function setDataToLocalStorage(data) {
             localStorage.setItem("spectrumCompositionData", JSON.stringify(data));
         }
-
 
         function getBlackBodySpectrumGeneratorDataFromUI(){
             return {
@@ -142,16 +147,14 @@
             }
         }
 
-
-
         function setDataToUI(data) {
             document.getElementById("targetSpectrum").value = spectrumToText(data.targetSpectrum);
+            document.getElementById("weights").value = spectrumToText(data.weights);
             document.getElementById("ledContainer").innerHTML = "";
             data.leds.forEach(led => {
                 addLED(led.name, led.spectrumValues, led.color, led.enabled);
             });
         }
-
 
         function setBlackBodySpectrumGeneratorDataToUI(data) {
             document.getElementById("blackBodyTemp").value = data.blackBodyTemp;
@@ -164,7 +167,6 @@
             updateChart();
         }
 
-
         function loadFromLocalStorage() {
             var data = getDataFromLocalStorage();
             var blackBodySpectrumGeneratorData = getBlackBodySpectrumGeneratorDataFromLocalStorage();
@@ -172,24 +174,18 @@
             setBlackBodySpectrumGeneratorDataToUI(blackBodySpectrumGeneratorData);
         }
 
-
-        
-
         //data: SpectrumCompositionData
         function solveSystem(data) {
-            
             const numSamples = 401;
-            
             let target = data.targetSpectrum;
+            let weights = data.weights;
             console.log(target.length);
-            
 
             let activeLeds = data.leds.filter(led => led.enabled);
             let numParameters = activeLeds.length;
             if (numParameters === 0) return;
 
             let colors = [];
-            //gradient - array size numParameters
             let gradient = new Array(numParameters).fill(0);
             let hessian = new Array(numParameters).fill(0).map(() => new Array(numParameters).fill(0));
 
@@ -199,15 +195,15 @@
 
                 colors.push(led.color);
 
-                gradient[i] = spectrumI.reduce((acc, val, j) => acc + val * target[j], 0);
+                gradient[i] = spectrumI.reduce((acc, val, j) => acc + val * target[j] * weights[j], 0);
                 for (let j = 0; j < numParameters; j++) {
                     let spectrumJ = activeLeds[j].spectrumValues;
-                    hessian[i][j] = spectrumI.reduce((acc, val, k) => acc + val * spectrumJ[k], 0);
+                    hessian[i][j] = spectrumI.reduce((acc, val, k) => acc + val * spectrumJ[k] * weights[k], 0);
                 }
             }
             console.log(hessian);
             console.log(gradient);
-            
+
             let cholesky = new ML.CholeskyDecomposition(hessian);
             let x = cholesky.solve(new ML.Matrix([gradient]).transpose()).to1DArray();
             let index = 0;
@@ -216,7 +212,7 @@
                 if (data.leds[i].enabled) {
                     result[i] = x[index];
                     index++;
-                } else{
+                } else {
                     result[i] = 0;
                 }
             }
@@ -224,7 +220,6 @@
         }
 
         function updateChart(data, multipliers) {
-
             var datasetElementPrototype = {
                 borderColor: "black",
                 borderWidth: 2,
@@ -255,14 +250,21 @@
             datasets.push(Object.assign({}, datasetElementPrototype, {
                 label: `Sum`,
                 data: sum,
-                borderColor: "black",
-                borderWidth: 1
+                borderColor: "gray",
+                borderWidth: 3
             }));
 
+            //add weights
+            datasets.push(Object.assign({}, datasetElementPrototype, {
+                label: `Weights`,
+                data: data.weights,
+                borderColor: "gray",
+                borderWidth: 1
+            }));
+            
 
             if (!window.chart) {
                 window.chart = new Chart(document.getElementById("spectrumChart"), {
-
                     type: "line",
                     data: { labels: wavelengthData, datasets },
                     options: { responsive: true, scales: { x: { title: { display: true, text: "Wavelength (nm)" } } } }
@@ -272,11 +274,65 @@
             window.chart.update();
             //remove animation
             window.chart.options.animation = false;
-
         }
-   
 
-        document.addEventListener("DOMContentLoaded", ()=>{
+        function photopicEfficiency(lambda) {
+            // Precise photopic luminous efficiency function V(lambda) from hyperphysics
+            const data = {
+                380: 0.0000, 390: 0.0001, 400: 0.0004, 410: 0.0012, 420: 0.0040,
+                430: 0.0116, 440: 0.0230, 450: 0.0380, 460: 0.0600, 470: 0.0910,
+                480: 0.1390, 490: 0.2080, 500: 0.3230, 510: 0.5030, 520: 0.7100,
+                530: 0.8620, 540: 0.9540, 550: 0.9950, 560: 0.9950, 570: 0.9520,
+                580: 0.8700, 590: 0.7570, 600: 0.6310, 610: 0.5030, 620: 0.3810,
+                630: 0.2650, 640: 0.1750, 650: 0.1070, 660: 0.0610, 670: 0.0320,
+                680: 0.0170, 690: 0.0082, 700: 0.0041, 710: 0.0021, 720: 0.0010,
+                730: 0.0005, 740: 0.0002, 750: 0.0001, 760: 0.0001, 770: 0.0000,
+                780: 0.0000
+            };
+            
+            if (lambda in data) return data[lambda];
+            
+            // Linear interpolation for intermediate values
+            const lower = Math.floor(lambda / 10) * 10;
+            const upper = lower + 10;
+            if (lower in data && upper in data) {
+                return data[lower] + (data[upper] - data[lower]) * (lambda - lower) / 10;
+            }
+            
+            return 0;
+        }
+
+        function cameraEfficiency(lambda) {
+            const data = {
+                405: 0.0087, 410: 0.0146, 415: 0.0846, 420: 0.6899, 425: 0.8787, 430: 0.9027, 435: 0.9111, 440: 0.9187,
+                445: 0.9211, 450: 0.9269, 455: 0.924, 460: 0.9319, 465: 0.9301, 470: 0.9353, 475: 0.9357, 480: 0.9357,
+                485: 0.9357, 490: 0.9372, 495: 0.9386, 500: 0.9337, 505: 0.9371, 510: 0.9314, 515: 0.9269, 520: 0.9269,
+                525: 0.9269, 530: 0.9207, 535: 0.909, 540: 0.9005, 545: 0.8893, 550: 0.8699, 555: 0.8539, 560: 0.8472,
+                565: 0.833, 570: 0.812, 575: 0.7909, 580: 0.7607, 585: 0.727, 590: 0.6947, 595: 0.6602, 600: 0.6213,
+                605: 0.5803, 610: 0.5404, 615: 0.5067, 620: 0.467, 625: 0.4254, 630: 0.3852, 635: 0.3482, 640: 0.3125,
+                645: 0.2773, 650: 0.25, 655: 0.226, 660: 0.2026, 665: 0.1707, 670: 0.1327, 675: 0.0892, 680: 0.0503,
+                685: 0.0258, 690: 0.0123, 695: 0.0069
+            };
+            
+            if (lambda in data) return data[lambda];
+            
+            const lower = Math.floor(lambda / 5) * 5;
+            const upper = lower + 5;
+            if (lower in data && upper in data) {
+                return data[lower] + (data[upper] - data[lower]) * (lambda - lower) / 5;
+            }
+            
+            return 0;
+        }
+
+
+        function fillWeightsWith (f) {
+            const weights = wavelengthData.map(f);
+            document.getElementById("weights").value = spectrumToText(weights);
+        }
+
+
+        document.addEventListener("DOMContentLoaded", () => {
             var data = getDataFromLocalStorage();
             console.log(data);
             setDataToUI(data);
@@ -290,13 +346,8 @@
             var multipliers = solveSystem(data);
             setMultipliers(data, multipliers);
             setDataToLocalStorage(data);
-            updateChart(data,multipliers);
+            updateChart(data, multipliers);
         }, 250);
-        
-    
-    
-    
     </script>
-
 </body>
 </html>
